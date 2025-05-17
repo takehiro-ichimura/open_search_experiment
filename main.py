@@ -29,6 +29,10 @@ def create_index(client, index_name: str, dimension: int = 768) -> None:
                     "story_vector": {
                         "type": "knn_vector",
                         "dimension": dimension
+                    },
+                    "attributes_vector": {
+                        "type": "knn_vector",
+                        "dimension": dimension
                     }
                 }
             }
@@ -36,8 +40,7 @@ def create_index(client, index_name: str, dimension: int = 768) -> None:
     )
 
 
-def main() -> None:
-    # JSONファイルから昔話データを読み込む
+def main(query_text) -> None:
     with open("folktales.json", "r", encoding="utf-8") as f:
         folktales = json.load(f)
 
@@ -62,26 +65,27 @@ def main() -> None:
 
     create_index(client, index_name)
 
-    print('\nベクトルを格納 ... \n')
+    print('\n🔄 ベクトルを登録中...\n')
 
     for folktale in folktales:
         name_vector = model.encode(folktale["name"]).tolist()
         story_vector = model.encode(folktale["story"]).tolist()
+        attributes_text = " ".join(folktale["attributes"])
+        attributes_vector = model.encode(attributes_text).tolist()
+
         doc = {
             **folktale,
             "name_vector": name_vector,
-            "story_vector": story_vector
+            "story_vector": story_vector,
+            "attributes_vector": attributes_vector
         }
         response = client.index(index=index_name, body=doc)
-        print(f"id: {response['_id']}, name: {folktale['name']}")
+        print(f"✅ id: {response['_id']} - {folktale['name']}")
 
-    # 検索キーワード（タイトル or 本文か不明）
-    query_text = "桃が流れてくる話"
     query_vector = model.encode(query_text).tolist()
 
-    # script_score を使って両ベクトルに重みづけしてスコア化
     query = {
-        "size": 3,
+        "size": 5,
         "query": {
             "script_score": {
                 "query": {
@@ -91,7 +95,8 @@ def main() -> None:
                     "source": """
                         double nameSim = cosineSimilarity(params.query_vector, doc['name_vector']);
                         double storySim = cosineSimilarity(params.query_vector, doc['story_vector']);
-                        return (0.3 * nameSim + 0.7 * storySim) + 1.0;
+                        double attrSim = cosineSimilarity(params.query_vector, doc['attributes_vector']);
+                        return (0.2 * nameSim + 0.6 * storySim + 0.2 * attrSim) + 1.0;
                     """,
                     "params": {
                         "query_vector": query_vector
@@ -103,18 +108,17 @@ def main() -> None:
 
     search_response = client.search(index=index_name, body=query)
 
-    print("\n検索結果:")
+    print(f"\n🔍 検索クエリ: {query_text}\n")
+    print("🔎 検索結果:")
     for hit in search_response["hits"]["hits"]:
         print(f"* {hit['_source']['name']} (score: {hit['_score']:.4f})")
 
 
 if __name__ == "__main__":
-    args = sys.argv
-    keyword = None
-    if len(args) > 1:
-        keyword = args[1]
-    else:
-        print("キーワードを指定してください。")
-        print("Usage: python main.py <keyword>")
+    if len(sys.argv) < 2:
+        print("❗検索語を指定してください。")
+        print("Usage: python main.py <クエリ>")
         sys.exit(1)
-    main()
+
+    keyword = " ".join(sys.argv[1:])
+    main(query_text=keyword)
